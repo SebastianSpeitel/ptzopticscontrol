@@ -1,78 +1,47 @@
 import requests
 import logging
 import socket
+from enum import Enum
+
+from PTZHTTP import PTZHTTP
 
 logging.basicConfig(level=logging.INFO)
+
 
 def toHex(num: int):
     return hex(num)[2:].zfill(2)
 
-class Camera:
+
+class Camera(PTZHTTP):
+    class ZOOM(Enum):
+        TELE = 'zoom_in'
+        IN = 'zoom_in'
+        WIDE = 'zoom_out'
+        OUT = 'zoom_out'
+        DIRECT = 'zoom_set'
+
+    class FOCUS(Enum):
+        NEAR = 'focus_near'
+        FAR = 'focus_far'
+        LOCK = 'focus_lock'
+        UNLOCK = 'focus_unlock'
+
+    class DRIVE(Enum):
+        UP = 'drive_up'
+        DOWN = 'drive_down'
+        LEFT = 'drive_left'
+        RIGHT = 'drive_right'
+        STOP = 'drive_stop'
+
     defaults = dict(
         pan_speed=10,
         tilt_speed=10,
         zoom_speed=5
     )
 
-    actions = dict(
-        up="03 01",
-        down="03 02",
-        left="01 03",
-        right="02 03",
-        upleft="01 01",
-        upright="02 01",
-        downleft="01 02",
-        downright="02 02",
-        stop="03 03",
-        zoomin="2",
-        zoomout="3",
-        zoomstop="0",
-    )
-
-    def __init__(self, ip: str, port: int = 1259, defaults: dict = dict()):
-        self.ip = ip
+    def __init__(self, defaults: dict = dict(), **kwargs):
         self.defaults = {**self.defaults, **defaults}
-        self.last_url = ''
-        self.last_message = ''
-        self.port = port
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-
-    def send(self, msg):
-        if msg == self.last_message:
-            return
-        self.sock.sendto(msg, (self.ip, self.port))
-        recvMsg = 0
-        while True:
-            nextBytes = self.sock.recv(50)
-            recvMsg = int(nextBytes.hex(), 16)
-            if 9461759 >= recvMsg >= 9457919:
-                recvMsg = 0
-                continue
-            elif 9457663 >= recvMsg >= 9453823:
-                self.last_message = msg
-                break
-
-    def _action(self, action: str, *args, **kwargs):
-        url = f"http://{self.ip}//cgi-bin/ptzctrl.cgi?ptzcmd&{action}"
-        for arg in args:
-            url += f"&{arg}"
-        for arg in kwargs.values():
-            url += f"&{arg}"
-
-        if self.last_url == url:
-            return
-
-        self.last_url = url
-        logging.info(url)
-        try:
-            requests.get(url)
-        except Exception:
-            logging.error("Request failed")
-            logging.error(dict(
-                action=action,
-                args=args,
-                kwargs=kwargs,
-                url=url))
+        super().__init__(**kwargs)
 
     def __getattr__(self, name):
         def cmd(*args, **kwargs):
@@ -80,32 +49,34 @@ class Camera:
                 if v is None:
                     kwargs[k] = self.defaults.get(k)
 
-            self._action(name, *args, **kwargs)
+            super()._action(name, *args, **kwargs)
 
         return cmd
 
-    def move(self, panSpeed: int, tiltSpeed: int):
-        action = ''
+    def move(self, panSpeed: int = 0, tiltSpeed: int = 0):
+        pan: Camera.DRIVE = Camera.DRIVE.STOP
+        tilt: Camera.DRIVE = Camera.DRIVE.STOP
 
         if tiltSpeed:
-            action += 'down' if tiltSpeed > 0 else 'up'
+            tilt = Camera.DRIVE.DOWN if tiltSpeed > 0 else Camera.DRIVE.UP
             tiltSpeed = abs(tiltSpeed)
 
         if panSpeed:
-            action += 'left' if panSpeed < 0 else 'right'
+            pan = Camera.DRIVE.LEFT if panSpeed < 0 else Camera.DRIVE.RIGHT
             panSpeed = abs(panSpeed)
 
-        if not action:
-            action = 'ptzstop'
-
-        act = Camera.actions.get(action, Camera.actions["stop"])
-        msg = bytearray.fromhex(f"81 01 06 01 {toHex(panSpeed)} {toHex(tiltSpeed)} {act} FF")
-        return self.send(msg)
+        super()._action(
+            action='drive',
+            pan=pan,
+            tilt=tilt,
+            pan_speed=panSpeed,
+            tilt_speed=tiltSpeed)
 
     def zoom(self, action, zoomspeed):
         if zoomspeed == None:
-            zoomspeed = Camera.defaults["zoom_speed"]
-        act = Camera.actions.get(action, Camera.actions.get(action, Camera.actions["zoomstop"]))
+            zoomspeed = self.defaults["zoom_speed"]
+        act = Camera.actions.get(action, Camera.actions.get(
+            action, Camera.actions["zoomstop"]))
 
         msg = bytearray.fromhex(f"81 01 04 07 {act}{zoomspeed} FF")
         self.send(msg)
@@ -121,4 +92,4 @@ class Camera:
 
 if __name__ == "__main__":
     cam = Camera('')
-    cam.move(0,0)
+    cam.move(0, 0)
